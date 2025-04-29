@@ -1,8 +1,6 @@
 ﻿using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using TestNest.Admin.Application.Contracts.Interfaces.Persistence;
-using TestNest.Admin.Application.Services;
 using TestNest.Admin.Application.Specifications.Common;
 using TestNest.Admin.Application.Specifications.EstablishmentSpecifications;
 using TestNest.Admin.Domain.Establishments;
@@ -16,7 +14,7 @@ using TestNest.Admin.SharedLibrary.ValueObjects;
 
 namespace TestNest.Admin.Infrastructure.Persistence.Repositories;
 
-public class EstablishmentRepository(ApplicationDbContext establishmentDbContext, ILogger<EstablishmentService> logger)
+public class EstablishmentRepository(ApplicationDbContext establishmentDbContext)
     : GenericRepository<Establishment, EstablishmentId>(establishmentDbContext), IEstablishmentRepository
 {
     private readonly ApplicationDbContext _EstablishmentDbContext = establishmentDbContext;

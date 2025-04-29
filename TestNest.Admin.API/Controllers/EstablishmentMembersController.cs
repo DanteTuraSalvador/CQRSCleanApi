@@ -1,7 +1,10 @@
 ﻿using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
 using TestNest.Admin.API.Helpers;
+using TestNest.Admin.Application.Contracts;
 using TestNest.Admin.Application.Contracts.Interfaces.Service;
+using TestNest.Admin.Application.CQRS.EstablishmentMembers.Commands;
+using TestNest.Admin.Application.CQRS.EstablishmentMembers.Queries;
 using TestNest.Admin.Application.Specifications.EstablishmentMemberSpecifications;
 using TestNest.Admin.SharedLibrary.Common.Results;
 using TestNest.Admin.SharedLibrary.Dtos.Paginations;
@@ -18,10 +21,10 @@ namespace TestNest.Admin.API.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 public class EstablishmentMembersController(
-    IEstablishmentMemberService establishmentMemberService,
+    IDispatcher dispatcher,
     IErrorResponseService errorResponseService) : ControllerBase
 {
-    private readonly IEstablishmentMemberService _establishmentMemberService = establishmentMemberService;
+    private readonly IDispatcher _dispatcher = dispatcher;
     private readonly IErrorResponseService _errorResponseService = errorResponseService;
 
     /// <summary>
@@ -41,7 +44,9 @@ public class EstablishmentMembersController(
     public async Task<IActionResult> CreateEstablishmentMember(
         [FromBody] EstablishmentMemberForCreationRequest creationRequest)
     {
-        Result<EstablishmentMemberResponse> result = await _establishmentMemberService.CreateEstablishmentMemberAsync(creationRequest);
+        var command = new CreateEstablishmentMemberCommand(creationRequest);
+        Result<EstablishmentMemberResponse> result = await _dispatcher
+            .SendCommandAsync<CreateEstablishmentMemberCommand, Result<EstablishmentMemberResponse>>(command);
 
         if (result.IsSuccess)
         {
@@ -81,14 +86,16 @@ public class EstablishmentMembersController(
             return HandleErrorResponse(memberIdResult.ErrorType, memberIdResult.Errors);
         }
 
-        Result<EstablishmentMemberResponse> updatedMember = await _establishmentMemberService.UpdateEstablishmentMemberAsync(memberIdResult.Value!, updateRequest);
+        var command = new UpdateEstablishmentMemberCommand(memberIdResult.Value!, updateRequest);
+        Result<EstablishmentMemberResponse> result = await _dispatcher
+            .SendCommandAsync<UpdateEstablishmentMemberCommand, Result<EstablishmentMemberResponse>>(command);
 
-        if (updatedMember.IsSuccess)
+        if (result.IsSuccess)
         {
-            return Ok(updatedMember.Value!);
+            return Ok(result.Value);
         }
 
-        return HandleErrorResponse(updatedMember.ErrorType, updatedMember.Errors);
+        return HandleErrorResponse(result.ErrorType, result.Errors);
     }
 
     /// <summary>
@@ -130,14 +137,16 @@ public class EstablishmentMembersController(
             return HandleErrorResponse(ErrorType.Validation, validationErrors);
         }
 
-        Result<EstablishmentMemberResponse> patchedMember = await _establishmentMemberService.PatchEstablishmentMemberAsync(memberIdResult.Value!, patchRequest);
+        var command = new PatchEstablishmentMemberCommand(memberIdResult.Value!, patchRequest);
+        Result<EstablishmentMemberResponse> result = await _dispatcher
+            .SendCommandAsync<PatchEstablishmentMemberCommand, Result<EstablishmentMemberResponse>>(command);
 
-        if (patchedMember.IsSuccess)
+        if (result.IsSuccess)
         {
-            return Ok(patchedMember.Value!);
+            return Ok(result.Value);
         }
 
-        return HandleErrorResponse(patchedMember.ErrorType, patchedMember.Errors);
+        return HandleErrorResponse(result.ErrorType, result.Errors);
     }
 
     /// <summary>
@@ -162,7 +171,8 @@ public class EstablishmentMembersController(
             return HandleErrorResponse(memberIdResult.ErrorType, memberIdResult.Errors);
         }
 
-        Result result = await _establishmentMemberService.DeleteEstablishmentMemberAsync(memberIdResult.Value!);
+        var command = new DeleteEstablishmentMemberCommand(memberIdResult.Value!);
+        Result result = await _dispatcher.SendCommandAsync<DeleteEstablishmentMemberCommand, Result>(command);
 
         if (result.IsSuccess)
         {
@@ -216,7 +226,9 @@ public class EstablishmentMembersController(
                 return HandleErrorResponse(memberIdResult.ErrorType, memberIdResult.Errors);
             }
 
-            Result<EstablishmentMemberResponse> singleMemberResult = await _establishmentMemberService.GetEstablishmentMemberByIdAsync(memberIdResult.Value!);
+            var getByIdQuery = new GetEstablishmentMemberByIdQuery(memberIdResult.Value!);
+            Result<EstablishmentMemberResponse> singleMemberResult = await _dispatcher
+                .SendQueryAsync<GetEstablishmentMemberByIdQuery, Result<EstablishmentMemberResponse>>(getByIdQuery);
 
             return singleMemberResult.IsSuccess && singleMemberResult.Value != null
                 ? Ok(singleMemberResult.Value)
@@ -224,7 +236,7 @@ public class EstablishmentMembersController(
         }
         else
         {
-            var spec = new EstablishmentMemberSpecification(
+            var specWithPaging = new EstablishmentMemberSpecification( 
                 pageNumber: pageNumber,
                 pageSize: pageSize,
                 sortBy: sortBy,
@@ -236,12 +248,26 @@ public class EstablishmentMembersController(
                 memberTag: memberTag
             );
 
-            Result<int> countResult = await _establishmentMemberService.CountAsync(spec);
+            var specWithoutPaging = new EstablishmentMemberSpecification(
+                establishmentId: establishmentId,
+                employeeId: employeeId,
+                memberTitle: memberTitle,
+                memberDescription: memberDescription,
+                memberTag: memberTag
+            );
+
+            var countQuery = new CountEstablishmentMembersQuery(specWithoutPaging);
+            Result<int> countResult = await _dispatcher
+                .SendQueryAsync<CountEstablishmentMembersQuery, Result<int>>(countQuery);
+
             if (!countResult.IsSuccess)
             { return HandleErrorResponse(countResult.ErrorType, countResult.Errors); }
             int totalCount = countResult.Value;
 
-            Result<IEnumerable<EstablishmentMemberResponse>> membersResult = await _establishmentMemberService.ListAsync(spec);
+            var listQuery = new ListEstablishmentMembersQuery(specWithPaging);
+            Result<IEnumerable<EstablishmentMemberResponse>> membersResult = await _dispatcher
+                .SendQueryAsync<ListEstablishmentMembersQuery, Result<IEnumerable<EstablishmentMemberResponse>>>(listQuery);
+
             if (!membersResult.IsSuccess)
             { return HandleErrorResponse(membersResult.ErrorType, membersResult.Errors); }
             IEnumerable<EstablishmentMemberResponse> responseData = membersResult.Value!;

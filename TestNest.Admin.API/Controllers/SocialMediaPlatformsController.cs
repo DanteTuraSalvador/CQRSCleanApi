@@ -1,7 +1,10 @@
 ﻿
 using Microsoft.AspNetCore.Mvc;
 using TestNest.Admin.API.Helpers;
+using TestNest.Admin.Application.Contracts;
 using TestNest.Admin.Application.Contracts.Interfaces.Service;
+using TestNest.Admin.Application.CQRS.SocialMediaPlatforms.Commands;
+using TestNest.Admin.Application.CQRS.SocialMediaPlatforms.Queries;
 using TestNest.Admin.Application.Mappings; 
 using TestNest.Admin.Application.Specifications.SoicalMediaPlatfomrSpecifications;
 using TestNest.Admin.Domain.SocialMedias;
@@ -18,10 +21,10 @@ namespace TestNest.Admin.API.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 public class SocialMediaPlatformsController(
-    ISocialMediaPlatformService socialMediaPlatformService,
+    IDispatcher dispatcher,
     IErrorResponseService errorResponseService) : ControllerBase
 {
-    private readonly ISocialMediaPlatformService _socialMediaPlatformService = socialMediaPlatformService;
+    private readonly IDispatcher _dispatcher = dispatcher;
     private readonly IErrorResponseService _errorResponseService = errorResponseService;
 
     /// <summary>
@@ -41,8 +44,9 @@ public class SocialMediaPlatformsController(
     public async Task<IActionResult> CreateSocialMediaPlatform(
         [FromBody] SocialMediaPlatformForCreationRequest socialMediaPlatformForCreationRequest)
     {
-        Result<SocialMediaPlatformResponse> result = await _socialMediaPlatformService
-            .CreateSocialMediaPlatformAsync(socialMediaPlatformForCreationRequest);
+
+        var command = new CreateSocialMediaPlatformCommand(socialMediaPlatformForCreationRequest);
+        Result<SocialMediaPlatformResponse> result = await _dispatcher.SendCommandAsync<CreateSocialMediaPlatformCommand, Result<SocialMediaPlatformResponse>>(command);
 
         if (result.IsSuccess)
         {
@@ -84,19 +88,19 @@ public class SocialMediaPlatformsController(
                 socialMediaIdValidatedResult.Errors);
         }
 
-        Result<SocialMediaPlatformResponse> updatedSocialMediaPlatform = await _socialMediaPlatformService
-            .UpdateSocialMediaPlatformAsync(
-                socialMediaIdValidatedResult.Value!,
-                socialMediaPlatformForUpdateRequest);
+        var command = new UpdateSocialMediaPlatformCommand(
+            socialMediaIdValidatedResult.Value!,
+            socialMediaPlatformForUpdateRequest);
 
-        if (updatedSocialMediaPlatform.IsSuccess)
+        Result<SocialMediaPlatformResponse> result = await _dispatcher.SendCommandAsync<UpdateSocialMediaPlatformCommand, Result<SocialMediaPlatformResponse>>(command);
+
+        if (result.IsSuccess)
         {
-            return Ok(updatedSocialMediaPlatform.Value!);
+            return Ok(result.Value!);
         }
-
         return HandleErrorResponse(
-            updatedSocialMediaPlatform.ErrorType,
-            updatedSocialMediaPlatform.Errors);
+            result.ErrorType,
+            result.Errors);
     }
 
     /// <summary>
@@ -125,13 +129,13 @@ public class SocialMediaPlatformsController(
                 socialMediaIdValidatedResult.Errors);
         }
 
-        Result result = await _socialMediaPlatformService.DeleteSocialMediaPlatformAsync(socialMediaIdValidatedResult.Value!);
+        var command = new DeleteSocialMediaPlatformCommand(socialMediaIdValidatedResult.Value!);
+        Result<SocialMediaPlatformResponse> result = await _dispatcher.SendCommandAsync<DeleteSocialMediaPlatformCommand, Result<SocialMediaPlatformResponse>>(command);
 
         if (result.IsSuccess)
         {
             return NoContent();
         }
-
         return HandleErrorResponse(result.ErrorType, result.Errors);
     }
 
@@ -156,13 +160,13 @@ public class SocialMediaPlatformsController(
     [ProducesResponseType(StatusCodes.Status404NotFound, Type = typeof(ProblemDetails))]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetAllSocialMediaPlatforms(
-        [FromQuery] int pageNumber = 1,
-        [FromQuery] int pageSize = 10,
-        [FromQuery] string sortBy = "Id",
-        [FromQuery] string sortOrder = "asc",
-        [FromQuery] string name = null,
-        [FromQuery] string platformURL = null,
-        [FromQuery] string socialMediaId = null)
+      [FromQuery] int pageNumber = 1,
+      [FromQuery] int pageSize = 10,
+      [FromQuery] string sortBy = "Id",
+      [FromQuery] string sortOrder = "asc",
+      [FromQuery] string name = null,
+      [FromQuery] string platformURL = null,
+      [FromQuery] string socialMediaId = null)
     {
         if (!string.IsNullOrEmpty(socialMediaId))
         {
@@ -172,39 +176,50 @@ public class SocialMediaPlatformsController(
                 return HandleErrorResponse(socialMediaIdValidatedResult.ErrorType, socialMediaIdValidatedResult.Errors);
             }
 
-            Result<SocialMediaPlatformResponse> singlePlatformResult = await _socialMediaPlatformService
-                .GetSocialMediaPlatformByIdAsync(socialMediaIdValidatedResult.Value!);
-
+            var getByIdQuery = new GetSocialMediaPlatformByIdQuery(socialMediaIdValidatedResult.Value!);
+            Result<SocialMediaPlatformResponse> singlePlatformResult = await _dispatcher.SendQueryAsync<GetSocialMediaPlatformByIdQuery, Result<SocialMediaPlatformResponse>>(getByIdQuery);
             return singlePlatformResult.IsSuccess
                 ? Ok(singlePlatformResult.Value!)
                 : HandleErrorResponse(singlePlatformResult.ErrorType, singlePlatformResult.Errors);
         }
         else
         {
-            var spec = new SocialMediaPlatformSpecification(
+            // Specification with paging for data retrieval
+            var specWithPaging = new SocialMediaPlatformSpecification(
                 name: name,
                 platformURL: platformURL,
                 sortBy: sortBy,
                 sortDirection: sortOrder,
                 pageNumber: pageNumber,
-                pageSize: pageSize
+                pageSize: pageSize,
+                socialMediaId: socialMediaId
             );
 
-            Result<int> countResult = await _socialMediaPlatformService.CountAsync(spec);
+            // Specification without paging for count retrieval
+            var specWithoutPaging = new SocialMediaPlatformSpecification(
+                name: name,
+                platformURL: platformURL,
+                sortBy: sortBy, // Include sorting for consistency
+                sortDirection: sortOrder, // Include sorting for consistency
+                socialMediaId: socialMediaId // Include other filters for accurate count
+                                             // Note: Omitting pageNumber and pageSize here
+            );
+
+            var countQuery = new CountSocialMediaPlatformsQuery(specWithoutPaging);
+            Result<int> countResult = await _dispatcher.SendQueryAsync<CountSocialMediaPlatformsQuery, Result<int>>(countQuery);
             if (!countResult.IsSuccess)
             {
                 return HandleErrorResponse(countResult.ErrorType, countResult.Errors);
             }
             int totalCount = countResult.Value;
 
-            Result<IEnumerable<SocialMediaPlatformResponse>> socialMediaPlatformsResult = await _socialMediaPlatformService
-                .GetAllSocialMediaPlatformsAsync(spec);
-            if (!socialMediaPlatformsResult.IsSuccess)
+            var getAllQuery = new GetAllSocialMediaPlatformsQuery(specWithPaging);
+            Result<IEnumerable<SocialMediaPlatformResponse>> platformsResult = await _dispatcher.SendQueryAsync<GetAllSocialMediaPlatformsQuery, Result<IEnumerable<SocialMediaPlatformResponse>>>(getAllQuery);
+            if (!platformsResult.IsSuccess)
             {
-                return HandleErrorResponse(socialMediaPlatformsResult.ErrorType, socialMediaPlatformsResult.Errors);
+                return HandleErrorResponse(platformsResult.ErrorType, platformsResult.Errors);
             }
-
-            IEnumerable<SocialMediaPlatformResponse> socialMediaPlatforms = socialMediaPlatformsResult.Value!;
+            IEnumerable<SocialMediaPlatformResponse> socialMediaPlatforms = platformsResult.Value!;
 
             if (socialMediaPlatforms == null || !socialMediaPlatforms.Any())
             {
@@ -222,13 +237,13 @@ public class SocialMediaPlatformsController(
                 PageNumber = pageNumber,
                 PageSize = pageSize,
                 TotalPages = totalPages,
-                Data = socialMediaPlatforms,
+                Data = socialMediaPlatforms.ToList(),
                 Links = new PaginatedLinks
                 {
-                    First = GeneratePaginationLink(1, pageSize, sortBy, sortOrder, name, platformURL),
-                    Last = totalPages > 0 ? GeneratePaginationLink(totalPages, pageSize, sortBy, sortOrder, name, platformURL) : null,
-                    Next = pageNumber < totalPages ? GeneratePaginationLink(pageNumber + 1, pageSize, sortBy, sortOrder, name, platformURL) : null,
-                    Previous = pageNumber > 1 ? GeneratePaginationLink(pageNumber - 1, pageSize, sortBy, sortOrder, name, platformURL) : null
+                    First = GenerateSocialMediaPlatformPaginationLink(1, pageSize, sortBy, sortOrder, name, platformURL),
+                    Last = totalPages > 0 ? GenerateSocialMediaPlatformPaginationLink(totalPages, pageSize, sortBy, sortOrder, name, platformURL) : null,
+                    Next = pageNumber < totalPages ? GenerateSocialMediaPlatformPaginationLink(pageNumber + 1, pageSize, sortBy, sortOrder, name, platformURL) : null,
+                    Previous = pageNumber > 1 ? GenerateSocialMediaPlatformPaginationLink(pageNumber - 1, pageSize, sortBy, sortOrder, name, platformURL) : null
                 }
             };
 
@@ -236,27 +251,28 @@ public class SocialMediaPlatformsController(
         }
     }
 
-    private string GeneratePaginationLink(
-          int targetPageNumber,
-          int pageSize,
-          string sortBy,
-          string sortOrder,
-          string name = null,
-          string platformURL = null)
-          => Url.Action(
-              nameof(GetAllSocialMediaPlatforms),
-              "SocialMediaPlatforms",
-              new
-              {
-                  pageNumber = targetPageNumber,
-                  pageSize,
-                  sortBy,
-                  sortOrder,
-                  name,
-                  platformURL
-              },
-              protocol: Request.Scheme
-          )!;
+    private string GenerateSocialMediaPlatformPaginationLink(
+        int targetPageNumber,
+        int pageSize,
+        string sortBy,
+        string sortOrder,
+        string name = null,
+        string platformURL = null)
+        => Url.Action(
+            nameof(GetAllSocialMediaPlatforms),
+            "SocialMediaPlatforms",
+            new
+            {
+                pageNumber = targetPageNumber,
+                pageSize,
+                sortBy,
+                sortOrder,
+                name,
+                platformURL
+            },
+            protocol: Request.Scheme
+        )!;
+
 
     private IActionResult HandleErrorResponse(ErrorType errorType, IEnumerable<Error> errors)
     {

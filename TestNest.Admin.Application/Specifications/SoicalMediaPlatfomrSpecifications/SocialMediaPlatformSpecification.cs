@@ -18,11 +18,11 @@ public class SocialMediaPlatformSpecification : BaseSpecification<SocialMediaPla
         int? pageSize = 10,
         string socialMediaId = null) // Included socialMediaId for filtering
     {
-        BaseSpecification<SocialMediaPlatform> spec = new BaseSpecification<SocialMediaPlatform>();
+        var spec = new BaseSpecification<SocialMediaPlatform>();
 
         if (!string.IsNullOrEmpty(socialMediaId))
         {
-            var socialMediaIdValidatedResult = IdHelper.ValidateAndCreateId<SocialMediaId>(socialMediaId);
+            SharedLibrary.Common.Results.Result<SocialMediaId> socialMediaIdValidatedResult = IdHelper.ValidateAndCreateId<SocialMediaId>(socialMediaId);
             if (socialMediaIdValidatedResult.IsSuccess)
             {
                 var idSpec = new BaseSpecification<SocialMediaPlatform>(e => e.SocialMediaId == socialMediaId);
@@ -39,14 +39,14 @@ public class SocialMediaPlatformSpecification : BaseSpecification<SocialMediaPla
         if (!string.IsNullOrEmpty(name))
         {
             var nameSpec = new BaseSpecification<SocialMediaPlatform>(
-                s => EF.Functions.Like(s.SocialMediaName.Name.ToLower(), $"%{name.ToLower()}%"));
+                s => EF.Functions.Like(s.SocialMediaName.Name.ToLowerInvariant(), $"%{name.ToLowerInvariant()}%"));
             spec = spec.And(nameSpec);
         }
 
         if (!string.IsNullOrEmpty(platformURL))
         {
             var urlSpec = new BaseSpecification<SocialMediaPlatform>(
-                s => EF.Functions.Like(s.SocialMediaName.PlatformURL.ToLower(), $"%{platformURL.ToLower()}%"));
+                s => EF.Functions.Like(s.SocialMediaName.PlatformURL.ToLowerInvariant(), $"%{platformURL.ToLowerInvariant()}%"));
             spec = spec.And(urlSpec);
         }
 
@@ -54,8 +54,8 @@ public class SocialMediaPlatformSpecification : BaseSpecification<SocialMediaPla
 
         if (!string.IsNullOrEmpty(sortBy))
         {
-            var direction = sortDirection.ToLower() == "desc" ? SortDirection.Descending : SortDirection.Ascending;
-            switch (sortBy.ToLower())
+            SortDirection direction = sortDirection.Equals("desc", StringComparison.OrdinalIgnoreCase) ? SortDirection.Descending : SortDirection.Ascending;
+            switch (sortBy.ToLowerInvariant())
             {
                 case "name":
                     AddOrderBy(s => s.SocialMediaName.Name, direction);

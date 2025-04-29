@@ -1,7 +1,10 @@
 ﻿using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
 using TestNest.Admin.API.Helpers;
-using TestNest.Admin.Application.Contracts.Interfaces.Service;
+using TestNest.Admin.Application.Contracts;
+using TestNest.Admin.Application.CQRS.EstablishmentAddresses.Commands;
+using TestNest.Admin.Application.CQRS.EstablishmentAddresses.Queries;
+using TestNest.Admin.Application.CQRS.Establishments.Queries;
 using TestNest.Admin.Application.Specifications.EstablishmentAddressesSpecifications;
 using TestNest.Admin.SharedLibrary.Common.Results;
 using TestNest.Admin.SharedLibrary.Dtos.Paginations;
@@ -15,10 +18,10 @@ namespace TestNest.Admin.API.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 public class EstablishmentAddressesController(
-    IEstablishmentAddressService establishmentAddressService,
+     IDispatcher dispatcher,
     IErrorResponseService errorResponseService) : ControllerBase
 {
-    private readonly IEstablishmentAddressService _establishmentAddressService = establishmentAddressService;
+    private readonly IDispatcher _dispatcher = dispatcher;
     private readonly IErrorResponseService _errorResponseService = errorResponseService;
 
     /// <summary>
@@ -45,8 +48,8 @@ public class EstablishmentAddressesController(
             return HandleErrorResponse(establishmentIdResult.ErrorType, establishmentIdResult.Errors);
         }
 
-        Result<EstablishmentAddressResponse> result = await _establishmentAddressService
-            .CreateEstablishmentAddressAsync(establishmentAddressForCreationRequest);
+        var command = new CreateEstablishmentAddressCommand(establishmentAddressForCreationRequest);
+        Result<EstablishmentAddressResponse> result = await _dispatcher.SendCommandAsync<CreateEstablishmentAddressCommand, Result<EstablishmentAddressResponse>>(command);
 
         if (result.IsSuccess)
         {
@@ -95,15 +98,14 @@ public class EstablishmentAddressesController(
             return HandleErrorResponse(establishmentIdResult.ErrorType, establishmentIdResult.Errors);
         }
 
-        Result<EstablishmentAddressResponse> updatedAddressResult = await _establishmentAddressService
-            .UpdateEstablishmentAddressAsync(establishmentAddressIdResult.Value!, establishmentAddressForUpdateRequest);
-
-        if (updatedAddressResult.IsSuccess)
+        var command = new UpdateEstablishmentAddressCommand(establishmentAddressIdResult.Value!, establishmentAddressForUpdateRequest);
+        Result<EstablishmentAddressResponse> result = await _dispatcher.SendCommandAsync<UpdateEstablishmentAddressCommand, Result<EstablishmentAddressResponse>>(command);
+        if (result.IsSuccess)
         {
-            return Ok(updatedAddressResult.Value);
+            return Ok(result.Value);
         }
 
-        return HandleErrorResponse(updatedAddressResult.ErrorType, updatedAddressResult.Errors);
+        return HandleErrorResponse(result.ErrorType, result.Errors);
     }
 
     /// <summary>
@@ -125,6 +127,7 @@ public class EstablishmentAddressesController(
     public async Task<IActionResult> DeleteEstablishmentAddress(
         string establishmentAddressId)
     {
+
         Result<EstablishmentAddressId> establishmentAddressIdResult = IdHelper
             .ValidateAndCreateId<EstablishmentAddressId>(establishmentAddressId);
         if (!establishmentAddressIdResult.IsSuccess)
@@ -132,9 +135,8 @@ public class EstablishmentAddressesController(
             return HandleErrorResponse(establishmentAddressIdResult.ErrorType, establishmentAddressIdResult.Errors);
         }
 
-        Result result = await _establishmentAddressService
-            .DeleteEstablishmentAddressAsync(establishmentAddressIdResult.Value!);
-
+        var command = new DeleteEstablishmentAddressCommand(establishmentAddressIdResult.Value!);
+        Result<EstablishmentAddressResponse> result = await _dispatcher.SendCommandAsync<DeleteEstablishmentAddressCommand, Result<EstablishmentAddressResponse>>(command);
         if (result.IsSuccess)
         {
             return NoContent();
@@ -191,7 +193,8 @@ public class EstablishmentAddressesController(
                 return HandleErrorResponse(addressIdResult.ErrorType, addressIdResult.Errors);
             }
 
-            Result<EstablishmentAddressResponse> singleAddressResult = await _establishmentAddressService.GetEstablishmentAddressByIdAsync(addressIdResult.Value!);
+            var query = new GetEstablishmentAddressByIdQuery(addressIdResult.Value!);
+            Result<EstablishmentAddressResponse> singleAddressResult = await _dispatcher.SendQueryAsync<GetEstablishmentAddressByIdQuery, Result<EstablishmentAddressResponse>>(query);
 
             return singleAddressResult.IsSuccess && singleAddressResult.Value != null
                 ? Ok(singleAddressResult.Value)
@@ -199,7 +202,7 @@ public class EstablishmentAddressesController(
         }
         else
         {
-            spec = new EstablishmentAddressSpecification(
+            var specWithPaging = new EstablishmentAddressSpecification(
                 pageNumber: pageNumber,
                 pageSize: pageSize,
                 sortBy: sortBy,
@@ -212,12 +215,31 @@ public class EstablishmentAddressesController(
                 isPrimary: isPrimary
             );
 
-            Result<int> countResult = await _establishmentAddressService.CountAsync(spec);
+            var specWithoutPaging = new EstablishmentAddressSpecification(
+                pageNumber: pageNumber,
+                pageSize: pageSize,
+                sortBy: sortBy,
+                sortOrder: sortOrder,
+                establishmentId: establishmentId,
+                city: city,
+                municipality: municipality,
+                province: province,
+                region: region,
+                isPrimary: isPrimary
+            );
+
+            var countQuery = new CountEstablishmentAddressQuery(specWithoutPaging);
+            Result<int> countResult = await _dispatcher
+                .SendQueryAsync<CountEstablishmentAddressQuery, Result<int>>(countQuery);
+
             if (!countResult.IsSuccess)
             { return HandleErrorResponse(countResult.ErrorType, countResult.Errors); }
             int totalCount = countResult.Value;
 
-            Result<IEnumerable<EstablishmentAddressResponse>> addressesResult = await _establishmentAddressService.ListAsync(spec);
+            var addressQuery = new GetAllEstablishmentAddressQuery(specWithPaging);
+            Result<IEnumerable<EstablishmentAddressResponse>> addressesResult = await _dispatcher
+                .SendQueryAsync<GetAllEstablishmentAddressQuery, Result<IEnumerable<EstablishmentAddressResponse>>>(addressQuery);
+
             if (!addressesResult.IsSuccess)
             { return HandleErrorResponse(addressesResult.ErrorType, addressesResult.Errors); }
             IEnumerable<EstablishmentAddressResponse> addresses = addressesResult.Value!;
@@ -299,15 +321,15 @@ public class EstablishmentAddressesController(
             return HandleErrorResponse(ErrorType.Validation, validationErrors);
         }
 
-        Result<EstablishmentAddressResponse> patchedAddressResult = await _establishmentAddressService
-            .PatchEstablishmentAddressAsync(establishmentAddressIdResult.Value!, establishmentAddressPatchRequest);
+        var command = new PatchEstablishmentAddressCommand(establishmentAddressIdResult.Value!, establishmentAddressPatchRequest);
+        Result<EstablishmentAddressResponse> result = await _dispatcher.SendCommandAsync<PatchEstablishmentAddressCommand, Result<EstablishmentAddressResponse>>(command);
 
-        if (patchedAddressResult.IsSuccess)
+        if (result.IsSuccess)
         {
-            return Ok(patchedAddressResult.Value);
+            return Ok(result.Value);
         }
 
-        return HandleErrorResponse(patchedAddressResult.ErrorType, patchedAddressResult.Errors);
+        return HandleErrorResponse(result.ErrorType, result.Errors);
     }
 
     private IActionResult HandleErrorResponse(ErrorType errorType, IEnumerable<Error> errors)

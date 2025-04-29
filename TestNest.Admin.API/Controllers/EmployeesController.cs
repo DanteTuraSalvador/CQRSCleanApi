@@ -1,9 +1,10 @@
 ﻿using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
 using TestNest.Admin.API.Helpers;
-using TestNest.Admin.Application.Contracts.Interfaces.Service;
+using TestNest.Admin.Application.Contracts; // Ensure this namespace is included
+using TestNest.Admin.Application.CQRS.Employees.Commands;
+using TestNest.Admin.Application.CQRS.Employees.Queries;
 using TestNest.Admin.Application.Specifications.EmployeeSpecifications;
-using TestNest.Admin.Domain.Employees;
 using TestNest.Admin.SharedLibrary.Common.Results;
 using TestNest.Admin.SharedLibrary.Dtos.Paginations;
 using TestNest.Admin.SharedLibrary.Dtos.Requests.Employee;
@@ -11,17 +12,16 @@ using TestNest.Admin.SharedLibrary.Dtos.Responses;
 using TestNest.Admin.SharedLibrary.Exceptions;
 using TestNest.Admin.SharedLibrary.Exceptions.Common;
 using TestNest.Admin.SharedLibrary.StronglyTypeIds;
-using TestNest.Admin.Application.Mappings;
 
 namespace TestNest.Admin.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
 public class EmployeesController(
-    IEmployeeService employeeService,
+    IDispatcher dispatcher, // Inject IDispatcher instead of IEmployeeService
     IErrorResponseService errorResponseService) : ControllerBase
 {
-    private readonly IEmployeeService _employeeService = employeeService;
+    private readonly IDispatcher _dispatcher = dispatcher;
     private readonly IErrorResponseService _errorResponseService = errorResponseService;
 
     /// <summary>
@@ -41,12 +41,12 @@ public class EmployeesController(
     public async Task<IActionResult> CreateEmployee(
         [FromBody] EmployeeForCreationRequest employeeForCreationRequest)
     {
-        Result<EmployeeResponse> result = await _employeeService
-            .CreateEmployeeAsync(employeeForCreationRequest);
+        var command = new CreateEmployeeCommand(employeeForCreationRequest);
+        Result<EmployeeResponse> result = await _dispatcher.SendCommandAsync<CreateEmployeeCommand, Result<EmployeeResponse>>(command);
 
         if (result.IsSuccess)
         {
-            var dto = result.Value!;
+            EmployeeResponse dto = result.Value!;
             return CreatedAtAction(
                 nameof(GetAllEmployees),
                 new { employeeId = dto.EmployeeId },
@@ -86,26 +86,12 @@ public class EmployeesController(
                 employeeIdValidatedResult.Errors);
         }
 
-        var employeePatchRequest = new EmployeePatchRequest();
-        patchDocument.ApplyTo(employeePatchRequest);
-
-        if (!TryValidateModel(employeePatchRequest))
-        {
-            var validationErrors = ModelState.Values
-                .SelectMany(v => v.Errors)
-                .Select(e => new Error("ValidationError", e.ErrorMessage))
-                .ToList();
-
-            return HandleErrorResponse(ErrorType.Validation, validationErrors);
-        }
-
-        Result<EmployeeResponse> result = await _employeeService
-            .PatchEmployeeAsync(employeeIdValidatedResult.Value!,
-                employeePatchRequest);
+        var command = new PatchEmployeeCommand(employeeIdValidatedResult.Value!, patchDocument);
+        Result<EmployeeResponse> result = await _dispatcher.SendCommandAsync<PatchEmployeeCommand, Result<EmployeeResponse>>(command);
 
         if (result.IsSuccess)
         {
-            return Ok(result.Value!); // Use the extension here
+            return Ok(result.Value!);
         }
 
         return HandleErrorResponse(result.ErrorType, result.Errors);
@@ -142,19 +128,17 @@ public class EmployeesController(
                 employeeIdValidatedResult.Errors);
         }
 
-        Result<EmployeeResponse> updatedEmployee = await _employeeService
-            .UpdateEmployeeAsync(
-                employeeIdValidatedResult.Value!,
-                employeeForUpdateRequest);
+        var command = new UpdateEmployeeCommand(employeeIdValidatedResult.Value!, employeeForUpdateRequest);
+        Result<EmployeeResponse> result = await _dispatcher.SendCommandAsync<UpdateEmployeeCommand, Result<EmployeeResponse>>(command);
 
-        if (updatedEmployee.IsSuccess)
+        if (result.IsSuccess)
         {
-            return Ok(updatedEmployee.Value!); // Use the extension here
+            return Ok(result.Value!);
         }
 
         return HandleErrorResponse(
-            updatedEmployee.ErrorType,
-            updatedEmployee.Errors);
+            result.ErrorType,
+            result.Errors);
     }
 
     /// <summary>
@@ -183,7 +167,8 @@ public class EmployeesController(
                 employeeIdValidatedResult.Errors);
         }
 
-        Result result = await _employeeService.DeleteEmployeeAsync(employeeIdValidatedResult.Value!);
+        var command = new DeleteEmployeeCommand(employeeIdValidatedResult.Value!);
+        Result result = await _dispatcher.SendCommandAsync<DeleteEmployeeCommand, Result>(command);
 
         if (result.IsSuccess)
         {
@@ -220,19 +205,19 @@ public class EmployeesController(
     [ProducesResponseType(StatusCodes.Status404NotFound, Type = typeof(ProblemDetails))]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetAllEmployees(
-        [FromQuery] int pageNumber = 1,
-        [FromQuery] int pageSize = 10,
-        [FromQuery] string sortBy = "EmployeeId",
-        [FromQuery] string sortOrder = "asc",
-        [FromQuery] string employeeId = null,
-        [FromQuery] string employeeNumber = null,
-        [FromQuery] string firstName = null,
-        [FromQuery] string middleName = null,
-        [FromQuery] string lastName = null,
-        [FromQuery] string emailAddress = null,
-        [FromQuery] int? employeeStatusId = null,
-        [FromQuery] string employeeRoleId = null,
-        [FromQuery] string establishmentId = null)
+      [FromQuery] int pageNumber = 1,
+      [FromQuery] int pageSize = 10,
+      [FromQuery] string sortBy = "EmployeeId",
+      [FromQuery] string sortOrder = "asc",
+      [FromQuery] string employeeId = null,
+      [FromQuery] string employeeNumber = null,
+      [FromQuery] string firstName = null,
+      [FromQuery] string middleName = null,
+      [FromQuery] string lastName = null,
+      [FromQuery] string emailAddress = null,
+      [FromQuery] int? employeeStatusId = null,
+      [FromQuery] string employeeRoleId = null,
+      [FromQuery] string establishmentId = null)
     {
         if (!string.IsNullOrEmpty(employeeId))
         {
@@ -242,14 +227,15 @@ public class EmployeesController(
                 return HandleErrorResponse(employeeIdValidatedResult.ErrorType, employeeIdValidatedResult.Errors);
             }
 
-            Result<EmployeeResponse> result = await _employeeService.GetEmployeeByIdAsync(employeeIdValidatedResult.Value!);
-            return result.IsSuccess
-                ? Ok(result.Value!)
-                : HandleErrorResponse(result.ErrorType, result.Errors);
+            var queryById = new GetEmployeeByIdQuery(employeeIdValidatedResult.Value!);
+            Result<EmployeeResponse> resultById = await _dispatcher.SendQueryAsync<GetEmployeeByIdQuery, Result<EmployeeResponse>>(queryById);
+            return resultById.IsSuccess
+                ? Ok(resultById.Value!)
+                : HandleErrorResponse(resultById.ErrorType, resultById.Errors);
         }
         else
         {
-            var spec = new EmployeeSpecification(
+            var specWithPaging = new EmployeeSpecification(
                 employeeNumber: employeeNumber,
                 firstName: firstName,
                 middleName: middleName,
@@ -264,14 +250,29 @@ public class EmployeesController(
                 pageSize: pageSize
             );
 
-            Result<int> countResult = await _employeeService.CountAsync(spec);
+            var specWithoutPaging = new EmployeeSpecification(
+                employeeNumber: employeeNumber,
+                firstName: firstName,
+                middleName: middleName,
+                lastName: lastName,
+                emailAddress: emailAddress,
+                employeeStatusId: employeeStatusId,
+                employeeRoleId: employeeRoleId,
+                establishmentId: establishmentId,
+                sortBy: sortBy, 
+                sortDirection: sortOrder
+            );
+
+            var countQuery = new CountEmployeesQuery(specWithoutPaging);
+            Result<int> countResult = await _dispatcher.SendQueryAsync<CountEmployeesQuery, Result<int>>(countQuery);
             if (!countResult.IsSuccess)
             {
                 return HandleErrorResponse(countResult.ErrorType, countResult.Errors);
             }
             int totalCount = countResult.Value;
 
-            Result<IEnumerable<EmployeeResponse>> employeesResult = await _employeeService.GetAllEmployeesAsync(spec);
+            var employeesQuery = new GetAllEmployeesQuery(specWithPaging);
+            Result<IEnumerable<EmployeeResponse>> employeesResult = await _dispatcher.SendQueryAsync<GetAllEmployeesQuery, Result<IEnumerable<EmployeeResponse>>>(employeesQuery);
             if (!employeesResult.IsSuccess)
             {
                 return HandleErrorResponse(employeesResult.ErrorType, employeesResult.Errors);
@@ -357,21 +358,19 @@ public class EmployeesController(
                 new Dictionary<string, object> { { "errors", safeErrors } }),
 
         ErrorType.NotFound =>
-            _errorResponseService.CreateProblemDetails(
-                StatusCodes.Status404NotFound,
-                "Not Found", "Resource not found.",
-                new Dictionary<string, object> { { "errors", safeErrors } }),
+            _errorResponseService.CreateProblemDetails(StatusCodes.Status404NotFound,
+                    "Not Found", "Resource not found.",
+                    new Dictionary<string, object> { { "errors", safeErrors } }),
 
-        ErrorType.Conflict =>
-            _errorResponseService.CreateProblemDetails(
-                StatusCodes.Status409Conflict,
-                "Conflict", "Resource conflict.",
-                new Dictionary<string, object> { { "errors", safeErrors } }),
+            ErrorType.Conflict =>
+                _errorResponseService.CreateProblemDetails(
+                    StatusCodes.Status409Conflict,
+                    "Conflict", "Resource conflict.",
+                    new Dictionary<string, object> { { "errors", safeErrors } }),
 
             _ => _errorResponseService.CreateProblemDetails(
-                       StatusCodes.Status500InternalServerError,
-                       "Internal Server Error", "An unexpected error occurred.")
+                    StatusCodes.Status500InternalServerError,
+                    "Internal Server Error", "An unexpected error occurred.")
         };
     }
 }
-

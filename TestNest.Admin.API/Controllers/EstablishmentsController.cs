@@ -1,9 +1,7 @@
 ﻿using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
 using TestNest.Admin.API.Helpers;
-using TestNest.Admin.Application.Contracts.Interfaces.Service;
 using TestNest.Admin.Application.Specifications.EstablishmentSpecifications;
-using TestNest.Admin.Domain.Establishments;
 using TestNest.Admin.SharedLibrary.Common.Results;
 using TestNest.Admin.SharedLibrary.Dtos.Paginations;
 using TestNest.Admin.SharedLibrary.Dtos.Requests.Establishment;
@@ -11,18 +9,19 @@ using TestNest.Admin.SharedLibrary.Dtos.Responses.Establishments;
 using TestNest.Admin.SharedLibrary.Exceptions;
 using TestNest.Admin.SharedLibrary.Exceptions.Common;
 using TestNest.Admin.SharedLibrary.StronglyTypeIds;
-using TestNest.Admin.Application.Mappings;
+using TestNest.Admin.Application.Contracts;
+using TestNest.Admin.Application.CQRS.Establishments.Commands;
+using TestNest.Admin.Application.CQRS.Establishments.Queries;
 
 namespace TestNest.Admin.API.Controllers;
-
 
 [ApiController]
 [Route("api/[controller]")]
 public class EstablishmentsController(
-    IEstablishmentService establishmentService,
+    IDispatcher dispatcher, // Inject IDispatcher instead of IEmployeeService
     IErrorResponseService errorResponseService) : ControllerBase
 {
-    private readonly IEstablishmentService _establishmentService = establishmentService;
+    private readonly IDispatcher _dispatcher = dispatcher;
     private readonly IErrorResponseService _errorResponseService = errorResponseService;
 
     /// <summary>
@@ -40,18 +39,17 @@ public class EstablishmentsController(
     public async Task<IActionResult> CreateEstablishment(
         [FromBody] EstablishmentForCreationRequest establishmentForCreationRequest)
     {
-        Result<EstablishmentResponse> result = await _establishmentService
-            .CreateEstablishmentAsync(establishmentForCreationRequest);
+        var command = new CreateEstablishmentCommand(establishmentForCreationRequest);
+        Result<EstablishmentResponse> result = await _dispatcher.SendCommandAsync<CreateEstablishmentCommand, Result<EstablishmentResponse>>(command);
 
         if (result.IsSuccess)
         {
-            EstablishmentResponse? dto = result.Value; 
+            EstablishmentResponse? dto = result.Value;
             return CreatedAtAction(
                 nameof(GetAllEstablishments),
                 new { establishmentId = dto!.EstablishmentId },
                 dto);
         }
-
         return HandleErrorResponse(result.ErrorType, result.Errors);
     }
 
@@ -84,19 +82,18 @@ public class EstablishmentsController(
                 establishmentIdValidatedResult.Errors);
         }
 
-        Result<EstablishmentResponse> updatedEstablishment = await _establishmentService
-            .UpdateEstablishmentAsync(
-                establishmentIdValidatedResult.Value!,
-                establishmentForUpdateRequest);
+        var command = new UpdateEstablishmentCommand(
+            establishmentIdValidatedResult.Value!,
+            establishmentForUpdateRequest);
+        Result<EstablishmentResponse> result = await _dispatcher.SendCommandAsync<UpdateEstablishmentCommand, Result<EstablishmentResponse>>(command);
 
-        if (updatedEstablishment.IsSuccess)
+        if (result.IsSuccess)
         {
-            return Ok(updatedEstablishment.Value!); 
+            return Ok(result.Value); // Use the extension here
         }
 
-        return HandleErrorResponse(
-            updatedEstablishment.ErrorType,
-            updatedEstablishment.Errors);
+        return HandleErrorResponse(result.ErrorType, result.Errors);
+
     }
 
     /// <summary>
@@ -140,13 +137,16 @@ public class EstablishmentsController(
             return HandleErrorResponse(ErrorType.Validation, validationErrors);
         }
 
-        Result<EstablishmentResponse> result = await _establishmentService
-            .PatchEstablishmentAsync(establishmentIdValidatedResult.Value!,
-                establishmentPatchRequest);
+        var command = new PatchEstablishmentCommand(
+            establishmentIdValidatedResult.Value!,
+            establishmentPatchRequest);
+
+        Result<EstablishmentResponse> result = await _dispatcher
+            .SendCommandAsync<PatchEstablishmentCommand, Result<EstablishmentResponse>>(command);
 
         if (result.IsSuccess)
         {
-            return Ok(result.Value); // Use the extension here
+            return Ok(result.Value);
         }
 
         return HandleErrorResponse(result.ErrorType, result.Errors);
@@ -178,7 +178,8 @@ public class EstablishmentsController(
                 establishmentIdValidatedResult.Errors);
         }
 
-        Result result = await _establishmentService.DeleteEstablishmentAsync(establishmentIdValidatedResult.Value!);
+        var command = new DeleteEstablishmentCommand(establishmentIdValidatedResult.Value!);
+        Result result = await _dispatcher.SendCommandAsync<DeleteEstablishmentCommand, Result>(command);
 
         if (result.IsSuccess)
         {
@@ -228,16 +229,17 @@ public class EstablishmentsController(
                 return HandleErrorResponse(establishmentIdValidatedResult.ErrorType, establishmentIdValidatedResult.Errors);
             }
 
-            Result<EstablishmentResponse> result = await _establishmentService
-                .GetEstablishmentByIdAsync(establishmentIdValidatedResult.Value!);
+            var queryById = new GetEstablishmentByIdQuery(establishmentIdValidatedResult.Value!);
+            Result<EstablishmentResponse> establishmentResult = await _dispatcher
+                .SendQueryAsync<GetEstablishmentByIdQuery, Result<EstablishmentResponse>>(queryById);
 
-            return result.IsSuccess
-                ? Ok(result.Value!)
-                : HandleErrorResponse(result.ErrorType, result.Errors);
+            return establishmentResult.IsSuccess
+              ? Ok(establishmentResult.Value!)
+              : HandleErrorResponse(establishmentResult.ErrorType, establishmentResult.Errors);
         }
         else
         {
-            var spec = new EstablishmentSpecification(
+            var specWithPaging = new EstablishmentSpecification(
                 establishmentName: establishmentName,
                 establishmentEmail: establishmentEmail,
                 establishmentStatusId: establishmentStatusId,
@@ -248,14 +250,30 @@ public class EstablishmentsController(
                 establishmentId: establishmentId
             );
 
-            Result<int> countResult = await _establishmentService.CountAsync(spec);
+            var specWithoutPaging = new EstablishmentSpecification(
+                establishmentName: establishmentName,
+                establishmentEmail: establishmentEmail,
+                establishmentStatusId: establishmentStatusId,
+                sortBy: sortBy,
+                sortDirection: sortOrder,
+                establishmentId: establishmentId
+            );
+
+            var countQuery = new CountEstablishmentQuery(specWithoutPaging);
+            Result<int> countResult = await _dispatcher
+                .SendQueryAsync<CountEstablishmentQuery, Result<int>>(countQuery);
+
             if (!countResult.IsSuccess)
             {
                 return HandleErrorResponse(countResult.ErrorType, countResult.Errors);
             }
             int totalCount = countResult.Value;
 
-            Result<IEnumerable<EstablishmentResponse>> establishmentsResult = await _establishmentService.GetEstablishmentsAsync(spec);
+            var establishmentsQuery = new GetAllEstablishmentQuery(specWithPaging);
+            Result<IEnumerable<EstablishmentResponse>> establishmentsResult = await _dispatcher
+                .SendQueryAsync<GetAllEstablishmentQuery, Result<IEnumerable<EstablishmentResponse>>>(establishmentsQuery);
+
+
             if (!establishmentsResult.IsSuccess)
             {
                 return HandleErrorResponse(establishmentsResult.ErrorType, establishmentsResult.Errors);
