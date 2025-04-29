@@ -4,7 +4,6 @@ using TestNest.Admin.API.Helpers;
 using TestNest.Admin.Application.Contracts;
 using TestNest.Admin.Application.CQRS.EstablishmentAddresses.Commands;
 using TestNest.Admin.Application.CQRS.EstablishmentAddresses.Queries;
-using TestNest.Admin.Application.CQRS.Establishments.Queries;
 using TestNest.Admin.Application.Specifications.EstablishmentAddressesSpecifications;
 using TestNest.Admin.SharedLibrary.Common.Results;
 using TestNest.Admin.SharedLibrary.Dtos.Paginations;
